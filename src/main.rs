@@ -1,7 +1,4 @@
-use std::{
-    fmt::Display,
-    time::{Duration, Instant},
-};
+use std::{fmt::Display, time::Duration};
 
 use tokio::{
     sync::{watch, Mutex},
@@ -104,7 +101,7 @@ impl ConsensusModule {
 
     pub async fn run_election_timer(&mut self, mut shutdown_rx: watch::Receiver<bool>) {
         loop {
-            self.election_timeout = Duration::from_millis(150 * rand::random::<u64>() % 150);
+            self.election_timeout = Duration::from_millis(150 + (rand::random::<u64>() % 150));
 
             self.update_heartbeat().await;
 
@@ -143,5 +140,59 @@ impl ConsensusModule {
                 self.id
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tokio::sync::watch;
+
+    use crate::*;
+
+    #[tokio::test]
+    async fn test_election_timer_shutdown() {
+        let mut cm = ConsensusModule::new(1, vec![2, 3]);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        let timer_handle = tokio::spawn(async move {
+            cm.run_election_timer(shutdown_rx).await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        shutdown_tx
+            .send(true)
+            .expect("Failed to send shutdown signal");
+
+        let _ = tokio::time::timeout(Duration::from_millis(100), timer_handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_trigger_new_election() {
+        let mut cm = ConsensusModule::new(1, vec![2, 3]);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        assert!(matches!(*cm.state.lock().await, CMState::Follower));
+        assert_eq!(*cm.current_term.lock().await, 0);
+        assert_eq!(cm.voted_for, None);
+
+        let timer_handle = tokio::spawn(async move {
+            cm.run_election_timer(shutdown_rx).await;
+            cm
+        });
+
+        // Wait for election timeout and state transition
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // try to send shutdown signal but do not panic if timer has already completed
+        let _ = shutdown_tx.send(true);
+
+        let cm = timer_handle.await.expect("Timer task failed");
+
+        assert!(matches!(*cm.state.lock().await, CMState::Candidate));
+        assert_eq!(cm.voted_for, Some(1));
+
+        assert_eq!(*cm.current_term.lock().await, 1);
     }
 }
