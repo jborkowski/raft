@@ -143,6 +143,12 @@ impl ConsensusModule {
     }
 }
 
+struct Server {}
+
+impl Server {
+    pub fn new() {}
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
